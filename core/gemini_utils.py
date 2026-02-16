@@ -1,65 +1,89 @@
 import os
 import io
 import random
+import math
+import re
 import asyncio
 import google.generativeai as genai
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFilter
 
 if os.environ.get("GOOGLE_API_KEY"):
     genai.configure(api_key=os.environ["GOOGLE_API_KEY"])
 
+model = genai.GenerativeModel('gemini-1.5-flash')
+
 PROMPTS = [
-    "Abstract cyberpunk cityscape, neon lights, digital art, high detail, 4k, no text",
-    "Mystical forest with glowing mushrooms, fantasy art, oil painting style, complex texture",
-    "Futuristic geometric patterns, colorful fractals, 3d render, high contrast",
-    "Space nebula background, stars and cosmic dust, realistic style, vivid colors",
-    "Abstract fluid art, swirling paint, acrylic pour, vibrant colors, intricate details"
+    "Draw a chaotic cyberpunk neon glitch pattern with lines and rectangles.",
+    "Draw a serene abstract landscape with flowing curves and gradients.",
+    "Draw a complex geometric mandala with symmetrical circles and triangles.",
+    "Draw a retro synthwave sunset with a grid and a sun.",
+    "Draw an abstract space nebula using randomly placed translucent ellipses.",
+    "Draw a digital rain matrix style pattern."
 ]
 
 async def generate_cover_image() -> bytes:
-    """Generate image via Google Gemini and convert to PNG."""
     try:
         selected_prompt = random.choice(PROMPTS)
-        model = genai.ImageGenerationModel("imagen-3.0-generate-001")
-        
-        response = await asyncio.to_thread(
-            model.generate_images,
-            prompt=selected_prompt,
-            number_of_images=1,
-            aspect_ratio="1:1",
-            safety_filter_level="block_only_high",
-            person_generation="allow_adult"
+
+        prompt_text = (
+            f"Write Python code using the 'PIL' (Pillow) library to draw: {selected_prompt}. "
+            "Assume variables 'img' (512x512 RGB) and 'draw' (ImageDraw object) are already created. "
+            "Use 'width' and 'height' variables (512). "
+            "Use 'random' and 'math' modules. "
+            "Do NOT use 'import'. Do NOT use 'Image.new' or 'save'. "
+            "Just write the drawing commands (draw.line, draw.rectangle, draw.ellipse, etc). "
+            "Make it colorful and detailed. "
+            "Output ONLY raw python code inside code blocks."
         )
 
-        image_data = response.images[0].image_bytes
-        img = Image.open(io.BytesIO(image_data))
+        response = await asyncio.to_thread(
+            model.generate_content,
+            prompt_text,
+            generation_config={"temperature": 1.0}
+        )
         
+        code = response.text
+        
+        clean_code = re.sub(r"```python|```", "", code).strip()
+        
+        width, height = 512, 512
+        img = Image.new('RGB', (width, height), color=(10, 10, 10))
+        draw = ImageDraw.Draw(img)
+        
+        local_scope = {
+            'img': img,
+            'draw': draw,
+            'width': width,
+            'height': height,
+            'random': random,
+            'math': math
+        }
+        
+        try:
+            exec(clean_code, {}, local_scope)
+        except Exception as exec_error:
+            print(f"Error: {exec_error}")
+            draw.text((10, 10), "AI Art Error", fill=(255, 0, 0))
+
         output = io.BytesIO()
         img.save(output, format="PNG")
         output.seek(0)
-        
         return output.getvalue()
 
     except Exception as e:
-        print(f"Gemini API error: {e}")
-        return await generate_fallback_image()
+        print(f"Gemini API Error: {e}")
+        return await generate_fallback_image(str(e))
 
-async def generate_fallback_image() -> bytes:
-    """Fallback: generate image locally."""
-    from PIL import ImageDraw
-    width, height = 512, 512
-    bg_color = (random.randint(0, 50), random.randint(0, 50), random.randint(0, 50))
-    img = Image.new('RGB', (width, height), bg_color)
+async def generate_fallback_image(error_text: str = "") -> bytes:
+    img = Image.new('RGB', (512, 512), (50, 0, 0)) 
     draw = ImageDraw.Draw(img)
-
-    for _ in range(100):
-        x1 = random.randint(0, width)
-        y1 = random.randint(0, height)
-        x2 = x1 + random.randint(10, 100)
-        y2 = y1 + random.randint(10, 100)
-        color = (random.randint(50, 255), random.randint(50, 255), random.randint(50, 255))
-        draw.rectangle([x1, y1, x2, y2], fill=color)
-
+    
+    for i in range(0, 512, 50):
+        draw.line([(i, 0), (i, 512)], fill=(100, 50, 50))
+        draw.line([(0, i), (512, i)], fill=(100, 50, 50))
+    if error_text:
+        print(f"Fallback due to: {error_text}")
+        
     output = io.BytesIO()
     img.save(output, format="PNG")
     output.seek(0)

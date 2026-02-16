@@ -60,7 +60,8 @@ async def process_password(message: types.Message, state: FSMContext):
         await msg.delete()
         
     except Exception as e:
-        await msg.edit_text(f"❌ Error: {str(e)}")
+        await msg.edit_text(f"❌ Generation error: {str(e)}")
+        return
     
     await state.clear()
 
