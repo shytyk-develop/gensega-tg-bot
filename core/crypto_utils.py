@@ -43,7 +43,7 @@ def decrypt_data(encrypted_data: bytes, password: str) -> str:
         if time.time() > payload["expiry"]:
             return "⛔ Message lifetime expired"
         
-        return f"🔓 **Secret message:**\n\n{payload['text']}"
+        return f"🔓 Secret message:\n\n{payload['text']}"
     except Exception:
         return "❌ Invalid password or corrupted data"
 
