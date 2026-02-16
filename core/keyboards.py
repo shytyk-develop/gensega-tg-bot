@@ -18,15 +18,18 @@ cancel_kb = ReplyKeyboardMarkup(
         [KeyboardButton(text="🔙 Cancel")]
     ],
     resize_keyboard=True,
-    input_field_placeholder="Enter data or press Cancel"
+    input_field_placeholder="Press to cancel"
 )
 
-# --- Image mode selection ---
+# --- Step 3/3: Choose method ---
 image_selection_kb = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="🎲 Generate pattern")],
+        [
+            KeyboardButton(text="📤 Send photo"),
+            KeyboardButton(text="🎲 Generate pattern")
+        ],
         [KeyboardButton(text="🔙 Cancel")]
     ],
     resize_keyboard=True,
-    input_field_placeholder="Send a photo or click 'Generate pattern'"
+    input_field_placeholder="Choose method..."
 )

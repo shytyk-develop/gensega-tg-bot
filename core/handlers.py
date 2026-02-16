@@ -1,50 +1,59 @@
 import io
 from aiogram import Router, F, types
-from aiogram.filters import Command, StateFilter
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BufferedInputFile, ReplyKeyboardRemove
 from PIL import Image
 
+# Import utilities
 from core.crypto_utils import encrypt_data, decrypt_data, embed_data, extract_data
 from core.image_utils import generate_cover_image
+# Import keyboards
 from core.keyboards import main_kb, cancel_kb, image_selection_kb
 
 router = Router()
+
+# --- FSM ---
+class EncodeState(StatesGroup):
+    waiting_for_text = State()          
+    waiting_for_password = State()      
+    waiting_for_method_choice = State() 
+    waiting_for_upload = State()        
+
+class DecodeState(StatesGroup):
+    waiting_for_file = State()
+    waiting_for_pass = State()
 
 # --- GLOBAL CANCEL ---
 @router.message(F.text == "🔙 Cancel")
 async def cmd_cancel(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer(
-        "❌ Action cancelled.",
+        "❌ Action cancelled.\nYou're back to the main menu.",
         reply_markup=main_kb
     )
 
-class EncodeState(StatesGroup):
-    waiting_for_text = State()
-    waiting_for_password = State()
-    waiting_for_image = State()
-
-class DecodeState(StatesGroup):
-    waiting_for_file = State()
-    waiting_for_pass = State()
-
+# --- START ---
 @router.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer(
-        "🕵️‍♂️ Welcome to GenStega\n\n"
+        "🕵️‍♂️ StegoBot\n\n"
         "I turn your secrets into images.\n"
         "Choose an action from the menu below:",
         reply_markup=main_kb
     )
 
+# ==========================================
+# ENCRYPTION LOGIC (ENCODE)
+# ==========================================
+
 @router.message(F.text == "🔒 Encrypt")
 @router.message(Command("encode"))
 async def start_encode(message: types.Message, state: FSMContext):
     await message.answer(
-        "✍️ Step 1/3:\n\nEnter the message you want to hide:",
+        "✍️ **Step 1/3:** Enter the secret text you want to hide:",
         reply_markup=cancel_kb
     )
     await state.set_state(EncodeState.waiting_for_text)
@@ -53,7 +62,7 @@ async def start_encode(message: types.Message, state: FSMContext):
 async def process_text(message: types.Message, state: FSMContext):
     await state.update_data(secret_text=message.text)
     await message.answer(
-        "🔑 Step 2/3:\n\nCreate a password for encryption:",
+        "🔑 **Step 2/3:** Create a password for encryption:",
         reply_markup=cancel_kb
     )
     await state.set_state(EncodeState.waiting_for_password)
@@ -61,29 +70,33 @@ async def process_text(message: types.Message, state: FSMContext):
 @router.message(EncodeState.waiting_for_password)
 async def process_password(message: types.Message, state: FSMContext):
     await state.update_data(password=message.text)
+    
+    # This is the Step 3/3 request with buttons
     await message.answer(
-        "🖼 Step 3/3: Choose a container\n\n"
-        "1. 📸 Send a photo — I'll put the message in it.\n"
-        "2. Or click '🎲 Generate pattern'",
+        "🖼 **Step 3/3**\n\nChoose the way to encrypt:",
         reply_markup=image_selection_kb
     )
-    await state.set_state(EncodeState.waiting_for_image)
+    # Transition to method choice state
+    await state.set_state(EncodeState.waiting_for_method_choice)
 
-@router.message(EncodeState.waiting_for_image, F.text == "🎲 Generate pattern")
+# --- CHOICE: GENERATION ---
+@router.message(EncodeState.waiting_for_method_choice, F.text == "🎲 Generate pattern")
 async def process_generate(message: types.Message, state: FSMContext):
     data = await state.get_data()
-    
-    msg = await message.answer("Creating a unique pattern...", reply_markup=ReplyKeyboardRemove())
+    msg = await message.answer("🎨 Creating a unique pattern...", reply_markup=ReplyKeyboardRemove())
     
     try:
+        # Generate
         image_bytes = await generate_cover_image()
+        
+        # Encrypt
         encrypted_data = encrypt_data(data['secret_text'], data['password'], ttl_minutes=60)
         stego_bytes = embed_data(image_bytes, encrypted_data)
         
         input_file = BufferedInputFile(stego_bytes, filename="secret_generated.png")
         await message.answer_document(
             input_file, 
-            caption="✅ Message hidden!\nSave this file as a document.",
+            caption="✅ **Secret hidden!**\nSave this file as a document.",
             reply_markup=main_kb
         )
         await msg.delete()
@@ -92,40 +105,56 @@ async def process_generate(message: types.Message, state: FSMContext):
         
     await state.clear()
 
-@router.message(EncodeState.waiting_for_image, F.photo | F.document)
+# --- CHOICE: SEND PHOTO (Transition to upload) ---
+@router.message(EncodeState.waiting_for_method_choice, F.text == "📤 Send photo")
+async def intent_send_photo(message: types.Message, state: FSMContext):
+    await message.answer(
+        "📸 **Waiting for photo**\n\n"
+        "Send an image (as photo or file).\n"
+        "I'll hide the text inside it.",
+        reply_markup=cancel_kb # Keep Cancel button
+    )
+    # Switch state to waiting for upload
+    await state.set_state(EncodeState.waiting_for_upload)
+
+# --- PROCESS UPLOADED PHOTO ---
+@router.message(EncodeState.waiting_for_upload, F.photo | F.document)
 async def process_custom_image(message: types.Message, state: FSMContext):
     data = await state.get_data()
     
+    # Logic for getting file
     if message.photo:
         file_id = message.photo[-1].file_id
     elif message.document:
         if not message.document.mime_type.startswith('image/'):
-            await message.answer("⛔ This is not an image.", reply_markup=image_selection_kb)
+            await message.answer("⛔ This is not an image. Try again.", reply_markup=cancel_kb)
             return
         file_id = message.document.file_id
     else:
-        await message.answer("Send a photo or click the button.", reply_markup=image_selection_kb)
+        await message.answer("I'm waiting for an image.", reply_markup=cancel_kb)
         return
 
-    status_msg = await message.answer("Processing image...", reply_markup=ReplyKeyboardRemove())
+    status_msg = await message.answer("📥 Downloading and processing...", reply_markup=ReplyKeyboardRemove())
 
     try:
         file = await message.bot.get_file(file_id)
         file_io = io.BytesIO()
         await message.bot.download_file(file.file_path, file_io)
         
+        # Convert to PNG
         img = Image.open(file_io).convert("RGB")
         png_io = io.BytesIO()
         img.save(png_io, format="PNG")
         image_bytes = png_io.getvalue()
         
+        # Encrypt
         encrypted_data = encrypt_data(data['secret_text'], data['password'], ttl_minutes=60)
         stego_bytes = embed_data(image_bytes, encrypted_data)
         
         input_file = BufferedInputFile(stego_bytes, filename="secret_photo.png")
         await message.answer_document(
             input_file, 
-            caption="✅ Done!\nMessage is hidden inside the file.",
+            caption="✅ **Done!**\nText is hidden inside the file.",
             reply_markup=main_kb
         )
         await status_msg.delete()
@@ -137,11 +166,15 @@ async def process_custom_image(message: types.Message, state: FSMContext):
 
 
 
+# ==========================================
+# DECRYPTION LOGIC (DECODE)
+# ==========================================
+
 @router.message(F.text == "🔓 Decrypt")
 @router.message(Command("decode"))
 async def start_decode(message: types.Message, state: FSMContext):
     await message.answer(
-        "📂 Send me a PNG file with the hidden message.\n(As a file, without compression)",
+        "📂 Send me a **PNG file** with a hidden secret.",
         reply_markup=cancel_kb
     )
     await state.set_state(DecodeState.waiting_for_file)
@@ -149,9 +182,7 @@ async def start_decode(message: types.Message, state: FSMContext):
 @router.message(DecodeState.waiting_for_file, F.photo)
 async def reject_photo_decode(message: types.Message):
     await message.answer(
-        "📛 You sent a photo!\n"
-        "Telegram compressed it and deleted the hidden text.\n"
-        "Please send it as a File (file_name.png).",
+        "📛 **You sent a photo!**\nTelegram compressed it and deleted the secret.\nPlease send it as a **File (Document)**.",
         reply_markup=cancel_kb
     )
 
